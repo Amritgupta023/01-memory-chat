@@ -2,14 +2,15 @@ import { ai, GEMINI_MODEL } from "../config/gemini.js";
 import {
   addModelMessage,
   addUserMessage,
-  getChatHistory,
+  getRecentChatHistory,
+  removeLastMessage,
 } from "./memory.service.js";
 
 /**
  * User message Gemini ko send karta hai.
  *
- * Level 2 mein current session ki puri conversation
- * Gemini ko context ke roop mein bheji jaati hai.
+ * Level 3 mein conversation RAM ke saath
+ * JSON file mein bhi persist hoti hai.
  */
 export async function generateReply(userMessage) {
   const cleanMessage = userMessage?.trim();
@@ -18,20 +19,29 @@ export async function generateReply(userMessage) {
     throw new Error("Message empty nahi ho sakta.");
   }
 
-  // Current user message history mein save karo.
-  addUserMessage(cleanMessage);
+  /*
+   * Pehle user message RAM aur JSON file mein save hoga.
+   */
+  await addUserMessage(cleanMessage);
 
   try {
+    /*
+     * Learning project mein recent 20 messages bhej rahe hain.
+     * Is value ko badha ya ghata sakte ho.
+     */
+    const conversationHistory = getRecentChatHistory(20);
+
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
-
-      // Current session ki puri conversation Gemini ko bhej rahe hain.
-      contents: getChatHistory(),
-
+      contents: conversationHistory,
       config: {
         systemInstruction: `
           You are a helpful AI assistant.
-          Use the previous conversation to answer the user.
+
+          Use the previous conversation when it is relevant.
+          Do not claim to remember information that is not present
+          in the supplied conversation.
+
           Reply clearly and concisely.
           Use Hinglish when the user writes in Hindi or Hinglish.
         `,
@@ -44,17 +54,19 @@ export async function generateReply(userMessage) {
       throw new Error("Gemini se empty response mila.");
     }
 
-    // Gemini ka response bhi history mein save karo.
-    addModelMessage(reply);
+    /*
+     * Gemini reply ko RAM aur JSON file mein save karo.
+     */
+    await addModelMessage(reply);
 
     return reply;
   } catch (error) {
     /*
-     * User message pehle history mein add ho chuka tha.
-     * API fail hone par use remove karna useful hai,
-     * warna failed message next request mein chala jayega.
+     * API fail hui to current user message ko history se remove karo.
+     *
+     * Warna next request mein failed message bhi context mein chala jayega.
      */
-    getChatHistory().pop();
+    await removeLastMessage();
 
     throw error;
   }
