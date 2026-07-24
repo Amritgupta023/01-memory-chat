@@ -1,0 +1,15 @@
+{
+  "name": "memory-chat",
+  "version": "1.0.0",
+  "description": "Level-by-level AI memory chatbot using Node.js and Gemini",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "dotenv": "^17.0.0"
+  }
+}
