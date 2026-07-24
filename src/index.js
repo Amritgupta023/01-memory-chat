@@ -8,7 +8,7 @@ const terminal = readline.createInterface({
 });
 
 console.log("=================================");
-console.log("       Gemini Memory Chat");
+console.log("      Gemini Memory Chat");
 console.log("=================================");
 console.log("Level 1: Basic chatbot — no memory");
 console.log('Exit karne ke liye "exit" likho.\n');
