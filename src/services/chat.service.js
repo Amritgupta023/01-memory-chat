@@ -8,101 +8,121 @@ import {
 } from "./memory.service.js";
 
 import {
-  applyMemoryOperations,
   formatUserMemoryForPrompt,
 } from "./user-memory.service.js";
 
-import { extractMemories } from "./memory-extractor.service.js";
+import {
+  extractMemories,
+} from "./memory-extractor.service.js";
+
+import {
+  addPendingMemories,
+} from "./pending-memory.service.js";
 
 /**
- * User message process karta hai:
+ * User message process karta hai.
  *
- * 1. Important memories extract karta hai
- * 2. Extracted memories save/update/delete karta hai
- * 3. User message chat history mein save karta hai
- * 4. Gemini se final reply generate karta hai
- * 5. Model reply chat history mein save karta hai
+ * Level 6 difference:
+ * Extracted memories directly user-memory.json mein save nahi hoti.
+ * Pehle pending-memory.json mein jaati hain.
  */
 export async function generateReply(userMessage) {
   const cleanMessage = userMessage?.trim();
 
   if (!cleanMessage) {
-    throw new Error("Message empty nahi ho sakta.");
+    throw new Error(
+      "Message empty nahi ho sakta."
+    );
   }
 
   /*
-   * Memory extraction fail hone par extractMemories()
-   * empty array return karega, isliye normal chat continue rahegi.
+   * Step 1:
+   * Natural-language message se possible memories extract karo.
    */
-  const extractedMemories = await extractMemories(cleanMessage);
-
-  const memoryResult = await applyMemoryOperations(
-    Array.isArray(extractedMemories) ? extractedMemories : []
-  );
+  const extractedMemories =
+    await extractMemories(cleanMessage);
 
   /*
-   * Defensive check:
-   * memoryResult undefined hone par bhi empty array milega.
+   * Step 2:
+   * Extracted memories ko pending state mein rakho.
    */
-  const appliedMemoryOperations = Array.isArray(
-    memoryResult?.applied
-  )
-    ? memoryResult.applied
-    : [];
+  const newPendingMemories =
+    await addPendingMemories(
+      Array.isArray(extractedMemories)
+        ? extractedMemories
+        : [],
+      cleanMessage
+    );
 
   /*
-   * Current user message persistent chat history mein save karo.
+   * Step 3:
+   * Current user message chat history mein save karo.
    */
   await addUserMessage(cleanMessage);
 
   try {
-    const longTermMemory = formatUserMemoryForPrompt();
-    const conversationHistory = getRecentChatHistory(20);
+    /*
+     * Sirf approved long-term memory prompt mein jayegi.
+     * Pending memories abhi Gemini personalization mein use nahi hongi.
+     */
+    const longTermMemory =
+      formatUserMemoryForPrompt();
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const conversationHistory =
+      getRecentChatHistory(20);
 
-      contents: conversationHistory,
+    const response =
+      await ai.models.generateContent({
+        model: GEMINI_MODEL,
 
-      config: {
-        systemInstruction: `
+        contents: conversationHistory,
+
+        config: {
+          systemInstruction: `
 You are a helpful AI assistant.
 
-Here is the user's saved long-term memory:
+Here is the user's approved long-term memory:
 
 ${longTermMemory}
 
 Instructions:
 
-- Use saved memory only when it is relevant.
+- Only treat the approved memory above as persistent user information.
+- You may still use information from the current conversation normally.
 - Do not mention JSON files or internal memory implementation.
-- Do not repeatedly mention personal information unnecessarily.
+- Do not claim that pending information has already been saved.
 - Never invent information about the user.
 - Prefer the user's latest explicitly stated information.
 - Reply clearly and concisely.
 - Use Hinglish when the user writes in Hindi or Hinglish.
-        `.trim(),
-      },
-    });
+          `.trim(),
+        },
+      });
 
     const reply = response.text?.trim();
 
     if (!reply) {
-      throw new Error("Gemini se empty response mila.");
+      throw new Error(
+        "Gemini se empty response mila."
+      );
     }
 
     await addModelMessage(reply);
 
-    /*
-     * Always same response shape return karo.
-     */
     return {
       reply,
-      memoryOperations: appliedMemoryOperations,
+      pendingMemories: Array.isArray(
+        newPendingMemories
+      )
+        ? newPendingMemories
+        : [],
     };
   } catch (error) {
     /*
-     * Current user message rollback karo.
+     * AI response fail ho to current user chat message rollback hoga.
+     *
+     * Pending extraction record ko audit/debugging ke liye rehne
+     * diya gaya hai.
      */
     await removeLastMessage();
 

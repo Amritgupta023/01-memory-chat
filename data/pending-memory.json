@@ -1,0 +1,24 @@
+[
+  {
+    "id": "mem_ms1x2pum_jq34kv",
+    "operation": "set",
+    "key": "name",
+    "value": "Amrit",
+    "reason": "User introduced themselves as Amrit.",
+    "sourceMessage": "Hi My name is amrit",
+    "status": "approved",
+    "createdAt": "2026-07-26T14:52:15.838Z",
+    "reviewedAt": "2026-07-26T14:53:01.016Z"
+  },
+  {
+    "id": "mem_ms1x4qaa_i75mv3",
+    "operation": "set",
+    "key": "favouriteLanguage",
+    "value": "Python",
+    "reason": "User mentioned liking Python.",
+    "sourceMessage": "I like Python.",
+    "status": "rejected",
+    "createdAt": "2026-07-26T14:53:49.714Z",
+    "reviewedAt": "2026-07-26T14:54:10.277Z"
+  }
+]

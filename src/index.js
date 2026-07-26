@@ -1,10 +1,13 @@
 import readline from "node:readline/promises";
+
 import {
   stdin as input,
   stdout as output,
 } from "node:process";
 
-import { generateReply } from "./services/chat.service.js";
+import {
+  generateReply,
+} from "./services/chat.service.js";
 
 import {
   clearChatHistory,
@@ -15,6 +18,7 @@ import {
 } from "./services/memory.service.js";
 
 import {
+  applyMemoryOperations,
   clearUserMemory,
   forgetMemory,
   getUserMemory,
@@ -23,15 +27,41 @@ import {
   setMemory,
 } from "./services/user-memory.service.js";
 
+import {
+  clearPendingMemoryRecords,
+  clearReviewedMemoryRecords,
+  getPendingMemories,
+  getPendingMemoryFilePath,
+  loadPendingMemories,
+  markMemoriesApproved,
+  markMemoriesRejected,
+  markMemoryApproved,
+  markMemoryRejected,
+} from "./services/pending-memory.service.js";
+
 const terminal = readline.createInterface({
   input,
   output,
 });
 
+function formatValue(value) {
+  if (
+    typeof value === "object" &&
+    value !== null
+  ) {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
 function displayHistory() {
   const history = getChatHistory();
 
-  if (!Array.isArray(history) || history.length === 0) {
+  if (
+    !Array.isArray(history) ||
+    history.length === 0
+  ) {
     console.log("\nChat history empty hai.\n");
     return;
   }
@@ -42,7 +72,9 @@ function displayHistory() {
 
   for (const message of history) {
     const speaker =
-      message.role === "user" ? "You" : "AI";
+      message.role === "user"
+        ? "You"
+        : "AI";
 
     const text =
       message.parts?.[0]?.text ?? "";
@@ -61,14 +93,14 @@ function displayUserMemory() {
 
   if (entries.length === 0) {
     console.log(
-      "\nLong-term memory empty hai.\n"
+      "\nApproved long-term memory empty hai.\n"
     );
 
     return;
   }
 
   console.log(
-    "\n------------ Long-Term Memory -----------"
+    "\n---------- Approved Long-Term Memory ----------"
   );
 
   for (const [key, value] of entries) {
@@ -78,19 +110,311 @@ function displayUserMemory() {
   }
 
   console.log(
-    "-----------------------------------------\n"
+    "-----------------------------------------------\n"
   );
 }
 
-function formatValue(value) {
+function displayPendingMemories(
+  memories = getPendingMemories()
+) {
   if (
-    typeof value === "object" &&
-    value !== null
+    !Array.isArray(memories) ||
+    memories.length === 0
   ) {
-    return JSON.stringify(value);
+    console.log(
+      "\nKoi pending memory nahi hai.\n"
+    );
+
+    return;
   }
 
-  return String(value);
+  console.log(
+    "\n-------------- Pending Memories --------------"
+  );
+
+  memories.forEach((memory, index) => {
+    const action =
+      memory.operation === "delete"
+        ? `Delete: ${memory.key}`
+        : `Save: ${memory.key} = ${formatValue(
+            memory.value
+          )}`;
+
+    console.log(`${index + 1}. ${action}`);
+    console.log(`   ID: ${memory.id}`);
+
+    if (memory.reason) {
+      console.log(
+        `   Reason: ${memory.reason}`
+      );
+    }
+
+    if (memory.sourceMessage) {
+      console.log(
+        `   Source: "${memory.sourceMessage}"`
+      );
+    }
+
+    console.log();
+  });
+
+  console.log(
+    "----------------------------------------------\n"
+  );
+}
+
+/**
+ * Extracted memory ko user se immediately approve/reject karwata hai.
+ */
+async function reviewNewMemories(
+  pendingMemories
+) {
+  if (
+    !Array.isArray(pendingMemories) ||
+    pendingMemories.length === 0
+  ) {
+    return;
+  }
+
+  console.log(
+    "Possible long-term memories detected:"
+  );
+
+  pendingMemories.forEach((memory, index) => {
+    if (memory.operation === "set") {
+      console.log(
+        `${index + 1}. Save ${memory.key} = ` +
+        `${formatValue(memory.value)}`
+      );
+    } else {
+      console.log(
+        `${index + 1}. Delete ${memory.key}`
+      );
+    }
+  });
+
+  console.log();
+
+  const answer = await terminal.question(
+    "Approve these memories? (yes/no/later): "
+  );
+
+  const normalizedAnswer = answer
+    .trim()
+    .toLowerCase();
+
+  const ids = pendingMemories.map(
+    (memory) => memory.id
+  );
+
+  if (
+    normalizedAnswer === "yes" ||
+    normalizedAnswer === "y"
+  ) {
+    const operations = pendingMemories.map(
+      (memory) => ({
+        operation: memory.operation,
+        key: memory.key,
+        value: memory.value,
+      })
+    );
+
+    const result =
+      await applyMemoryOperations(operations);
+
+    const appliedIds = result.applied.map(
+      (appliedOperation) => {
+        const matchingMemory =
+          pendingMemories.find(
+            (memory) =>
+              memory.operation ===
+                appliedOperation.operation &&
+              memory.key === appliedOperation.key
+          );
+
+        return matchingMemory?.id;
+      }
+    ).filter(Boolean);
+
+    await markMemoriesApproved(appliedIds);
+
+    /*
+     * Operation apply na ho paayi, jaise missing delete key,
+     * to record reject kar dete hain.
+     */
+    const unappliedIds = ids.filter(
+      (id) => !appliedIds.includes(id)
+    );
+
+    if (unappliedIds.length > 0) {
+      await markMemoriesRejected(unappliedIds);
+    }
+
+    if (result.applied.length > 0) {
+      console.log(
+        `\n${result.applied.length} memory operation(s) approved and applied.\n`
+      );
+    } else {
+      console.log(
+        "\nKoi memory operation apply nahi hui.\n"
+      );
+    }
+
+    return;
+  }
+
+  if (
+    normalizedAnswer === "no" ||
+    normalizedAnswer === "n"
+  ) {
+    await markMemoriesRejected(ids);
+
+    console.log(
+      "\nDetected memories reject kar di gayi hain.\n"
+    );
+
+    return;
+  }
+
+  console.log(
+    "\nMemories pending rakhi gayi hain. " +
+    "Baad mein /pending command se review kar sakte ho.\n"
+  );
+}
+
+async function approvePendingMemory(id) {
+  const pendingMemories = getPendingMemories();
+
+  const memory = pendingMemories.find(
+    (item) => item.id === id
+  );
+
+  if (!memory) {
+    console.log(
+      `\nPending memory "${id}" nahi mili.\n`
+    );
+
+    return;
+  }
+
+  const result = await applyMemoryOperations([
+    {
+      operation: memory.operation,
+      key: memory.key,
+      value: memory.value,
+    },
+  ]);
+
+  if (result.applied.length === 0) {
+    console.log(
+      "\nMemory operation apply nahi hui.\n"
+    );
+
+    return;
+  }
+
+  await markMemoryApproved(id);
+
+  console.log(
+    `\nMemory approved: ${memory.key}\n`
+  );
+}
+
+async function rejectPendingMemory(id) {
+  const rejected =
+    await markMemoryRejected(id);
+
+  if (!rejected) {
+    console.log(
+      `\nPending memory "${id}" nahi mili.\n`
+    );
+
+    return;
+  }
+
+  console.log(
+    `\nMemory "${id}" reject kar di gayi.\n`
+  );
+}
+
+async function approveAllPendingMemories() {
+  const pendingMemories =
+    getPendingMemories();
+
+  if (pendingMemories.length === 0) {
+    console.log(
+      "\nKoi pending memory nahi hai.\n"
+    );
+
+    return;
+  }
+
+  const operations = pendingMemories.map(
+    (memory) => ({
+      operation: memory.operation,
+      key: memory.key,
+      value: memory.value,
+    })
+  );
+
+  const result =
+    await applyMemoryOperations(operations);
+
+  const approvedIds = [];
+
+  for (const appliedOperation of result.applied) {
+    const matchingMemory =
+      pendingMemories.find(
+        (memory) =>
+          !approvedIds.includes(memory.id) &&
+          memory.operation ===
+            appliedOperation.operation &&
+          memory.key === appliedOperation.key
+      );
+
+    if (matchingMemory) {
+      approvedIds.push(matchingMemory.id);
+    }
+  }
+
+  await markMemoriesApproved(approvedIds);
+
+  const rejectedIds = pendingMemories
+    .map((memory) => memory.id)
+    .filter(
+      (id) => !approvedIds.includes(id)
+    );
+
+  if (rejectedIds.length > 0) {
+    await markMemoriesRejected(rejectedIds);
+  }
+
+  console.log(
+    `\n${result.applied.length} pending memory operation(s) approved.\n`
+  );
+}
+
+async function rejectAllPendingMemories() {
+  const pendingMemories =
+    getPendingMemories();
+
+  if (pendingMemories.length === 0) {
+    console.log(
+      "\nKoi pending memory nahi hai.\n"
+    );
+
+    return;
+  }
+
+  await markMemoriesRejected(
+    pendingMemories.map(
+      (memory) => memory.id
+    )
+  );
+
+  console.log(
+    "\nSaari pending memories reject kar di gayi hain.\n"
+  );
 }
 
 async function handleRememberCommand(message) {
@@ -100,8 +424,7 @@ async function handleRememberCommand(message) {
 
   if (!commandContent) {
     console.log(
-      "Usage: /remember key=value\n" +
-      "Example: /remember name=Amrit\n"
+      "Usage: /remember key=value\n"
     );
 
     return;
@@ -144,7 +467,7 @@ async function handleRememberCommand(message) {
   await setMemory(key, value);
 
   console.log(
-    `AI: Maine "${key}" long-term memory mein save kar liya.\n`
+    `AI: "${key}" manually save kar liya.\n`
   );
 }
 
@@ -155,103 +478,93 @@ async function handleForgetCommand(message) {
 
   if (!key) {
     console.log(
-      "Usage: /forget key\n" +
-      "Example: /forget company\n"
+      "Usage: /forget key\n"
     );
 
     return;
   }
 
-  const wasDeleted = await forgetMemory(key);
-
-  if (!wasDeleted) {
-    console.log(
-      `AI: "${key}" naam ki memory nahi mili.\n`
-    );
-
-    return;
-  }
+  const deleted = await forgetMemory(key);
 
   console.log(
-    `AI: Maine "${key}" memory se delete kar diya.\n`
+    deleted
+      ? `\nMemory "${key}" delete kar di gayi.\n`
+      : `\nMemory "${key}" nahi mili.\n`
   );
-}
-
-function displayMemoryOperations(
-  memoryOperations
-) {
-  if (
-    !Array.isArray(memoryOperations) ||
-    memoryOperations.length === 0
-  ) {
-    return;
-  }
-
-  for (const memory of memoryOperations) {
-    if (memory.operation === "set") {
-      console.log(
-        `Memory saved: ${memory.key} = ` +
-        `${formatValue(memory.value)}`
-      );
-
-      continue;
-    }
-
-    if (memory.operation === "delete") {
-      console.log(
-        `Memory deleted: ${memory.key}`
-      );
-    }
-  }
-
-  console.log();
 }
 
 async function startChat() {
   await Promise.all([
     loadChatHistory(),
     loadUserMemory(),
+    loadPendingMemories(),
   ]);
 
   console.log("=================================");
   console.log("       Gemini Memory Chat");
   console.log("=================================");
   console.log(
-    "Level 5: Automatic memory extraction"
+    "Level 6: Memory approval and rejection"
   );
   console.log(
-    `Chat messages loaded: ${getHistoryCount()}`
+    `Chat messages: ${getHistoryCount()}`
   );
   console.log(
-    `Long-term memories loaded: ${
+    `Approved memories: ${
       Object.keys(getUserMemory() ?? {}).length
     }`
   );
+  console.log(
+    `Pending memories: ${
+      getPendingMemories().length
+    }`
+  );
 
-  console.log("\nAvailable commands:");
+  console.log("\nCommands:");
   console.log(
-    "  /history              - Chat history dekho"
+    "  /history              - Chat history"
   );
   console.log(
-    "  /reset                - Chat history clear karo"
+    "  /reset                - Clear chat history"
   );
   console.log(
-    "  /remember key=value   - Memory manually save karo"
+    "  /memory               - Approved memories"
   );
   console.log(
-    "  /memory               - Long-term memory dekho"
+    "  /pending              - Pending memories"
   );
   console.log(
-    "  /forget key           - Specific memory delete karo"
+    "  /approve <id>         - Approve one memory"
   );
   console.log(
-    "  /clear-memory         - Complete memory clear karo"
+    "  /reject <id>          - Reject one memory"
   );
   console.log(
-    "  /files                - Storage paths dekho"
+    "  /approve-all          - Approve all pending"
   );
   console.log(
-    "  exit                  - Application close karo"
+    "  /reject-all           - Reject all pending"
+  );
+  console.log(
+    "  /remember key=value   - Manual memory"
+  );
+  console.log(
+    "  /forget key           - Delete approved memory"
+  );
+  console.log(
+    "  /clear-memory         - Clear approved memory"
+  );
+  console.log(
+    "  /clear-reviewed       - Clear reviewed audit records"
+  );
+  console.log(
+    "  /clear-pending-file   - Clear all pending records"
+  );
+  console.log(
+    "  /files                - Show data file paths"
+  );
+  console.log(
+    "  exit                  - Close application"
   );
   console.log();
 
@@ -281,18 +594,23 @@ async function startChat() {
         continue;
       }
 
+      if (command === "/memory") {
+        displayUserMemory();
+        continue;
+      }
+
+      if (command === "/pending") {
+        displayPendingMemories();
+        continue;
+      }
+
       if (command === "/reset") {
         await clearChatHistory();
 
         console.log(
-          "AI: Chat history clear kar di gayi hai.\n"
+          "\nChat history clear kar di gayi.\n"
         );
 
-        continue;
-      }
-
-      if (command === "/memory") {
-        displayUserMemory();
         continue;
       }
 
@@ -312,11 +630,65 @@ async function startChat() {
         continue;
       }
 
+      if (
+        command.startsWith("/approve ")
+      ) {
+        const id = message
+          .slice("/approve".length)
+          .trim();
+
+        await approvePendingMemory(id);
+        continue;
+      }
+
+      if (
+        command.startsWith("/reject ")
+      ) {
+        const id = message
+          .slice("/reject".length)
+          .trim();
+
+        await rejectPendingMemory(id);
+        continue;
+      }
+
+      if (command === "/approve-all") {
+        await approveAllPendingMemories();
+        continue;
+      }
+
+      if (command === "/reject-all") {
+        await rejectAllPendingMemories();
+        continue;
+      }
+
       if (command === "/clear-memory") {
         await clearUserMemory();
 
         console.log(
-          "AI: Complete long-term memory clear kar di gayi hai.\n"
+          "\nApproved memory clear kar di gayi.\n"
+        );
+
+        continue;
+      }
+
+      if (command === "/clear-reviewed") {
+        await clearReviewedMemoryRecords();
+
+        console.log(
+          "\nReviewed records clear kar diye gaye.\n"
+        );
+
+        continue;
+      }
+
+      if (
+        command === "/clear-pending-file"
+      ) {
+        await clearPendingMemoryRecords();
+
+        console.log(
+          "\nPending-memory file clear kar di gayi.\n"
         );
 
         continue;
@@ -328,7 +700,11 @@ async function startChat() {
         );
 
         console.log(
-          `User memory: ${getUserMemoryFilePath()}\n`
+          `User memory: ${getUserMemoryFilePath()}`
+        );
+
+        console.log(
+          `Pending memory: ${getPendingMemoryFilePath()}\n`
         );
 
         continue;
@@ -345,29 +721,22 @@ async function startChat() {
         `${" ".repeat(80)}\r`
       );
 
-      /*
-       * Defensive handling:
-       * generateReply string ya incomplete object return kare
-       * tab bhi application crash nahi hogi.
-       */
       const reply =
         typeof result === "string"
           ? result
           : result?.reply;
 
-      const memoryOperations =
-        typeof result === "object" &&
-        result !== null &&
-        Array.isArray(result.memoryOperations)
-          ? result.memoryOperations
+      const pendingMemories =
+        Array.isArray(result?.pendingMemories)
+          ? result.pendingMemories
           : [];
-
-      displayMemoryOperations(
-        memoryOperations
-      );
 
       console.log(
         `AI: ${reply ?? "No response received"}\n`
+      );
+
+      await reviewNewMemories(
+        pendingMemories
       );
     } catch (error) {
       process.stdout.write(
