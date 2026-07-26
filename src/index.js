@@ -1,5 +1,8 @@
 import readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
+import {
+  stdin as input,
+  stdout as output,
+} from "node:process";
 
 import { generateReply } from "./services/chat.service.js";
 
@@ -28,84 +31,109 @@ const terminal = readline.createInterface({
 function displayHistory() {
   const history = getChatHistory();
 
-  if (history.length === 0) {
+  if (!Array.isArray(history) || history.length === 0) {
     console.log("\nChat history empty hai.\n");
     return;
   }
 
-  console.log("\n------------- Chat History -------------");
+  console.log(
+    "\n------------- Chat History -------------"
+  );
 
   for (const message of history) {
-    const speaker = message.role === "user" ? "You" : "AI";
-    const text = message.parts?.[0]?.text ?? "";
+    const speaker =
+      message.role === "user" ? "You" : "AI";
+
+    const text =
+      message.parts?.[0]?.text ?? "";
 
     console.log(`${speaker}: ${text}`);
   }
 
-  console.log("----------------------------------------\n");
+  console.log(
+    "----------------------------------------\n"
+  );
 }
 
 function displayUserMemory() {
   const memory = getUserMemory();
-  const entries = Object.entries(memory);
+  const entries = Object.entries(memory ?? {});
 
   if (entries.length === 0) {
-    console.log("\nLong-term memory empty hai.\n");
+    console.log(
+      "\nLong-term memory empty hai.\n"
+    );
+
     return;
   }
 
-  console.log("\n------------ Long-Term Memory -----------");
+  console.log(
+    "\n------------ Long-Term Memory -----------"
+  );
 
   for (const [key, value] of entries) {
-    const formattedValue =
-      typeof value === "object"
-        ? JSON.stringify(value)
-        : String(value);
-
-    console.log(`${key}: ${formattedValue}`);
+    console.log(
+      `${key}: ${formatValue(value)}`
+    );
   }
 
-  console.log("-----------------------------------------\n");
+  console.log(
+    "-----------------------------------------\n"
+  );
 }
 
-/**
- * `/remember name=Amrit` command process karta hai.
- */
+function formatValue(value) {
+  if (
+    typeof value === "object" &&
+    value !== null
+  ) {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
 async function handleRememberCommand(message) {
-  const commandContent = message.slice("/remember".length).trim();
+  const commandContent = message
+    .slice("/remember".length)
+    .trim();
 
   if (!commandContent) {
     console.log(
-      "Usage: /remember key=value\nExample: /remember name=Amrit\n"
+      "Usage: /remember key=value\n" +
+      "Example: /remember name=Amrit\n"
     );
+
     return;
   }
 
-  const separatorIndex = commandContent.indexOf("=");
+  const separatorIndex =
+    commandContent.indexOf("=");
 
   if (separatorIndex === -1) {
     console.log(
       "Invalid format. Use: /remember key=value\n"
     );
+
     return;
   }
 
-  const key = commandContent.slice(0, separatorIndex).trim();
-  const rawValue = commandContent.slice(separatorIndex + 1).trim();
+  const key = commandContent
+    .slice(0, separatorIndex)
+    .trim();
+
+  const rawValue = commandContent
+    .slice(separatorIndex + 1)
+    .trim();
 
   if (!key || !rawValue) {
     console.log(
       "Key aur value dono required hain.\n"
     );
+
     return;
   }
 
-  /*
-   * Comma-separated values ko array bana rahe hain.
-   *
-   * Example:
-   * /remember interests=AI,System Design
-   */
   const value = rawValue.includes(",")
     ? rawValue
         .split(",")
@@ -115,33 +143,71 @@ async function handleRememberCommand(message) {
 
   await setMemory(key, value);
 
-  console.log(`AI: Maine "${key}" long-term memory mein save kar liya.\n`);
+  console.log(
+    `AI: Maine "${key}" long-term memory mein save kar liya.\n`
+  );
 }
 
 async function handleForgetCommand(message) {
-  const key = message.slice("/forget".length).trim();
+  const key = message
+    .slice("/forget".length)
+    .trim();
 
   if (!key) {
     console.log(
-      "Usage: /forget key\nExample: /forget company\n"
+      "Usage: /forget key\n" +
+      "Example: /forget company\n"
     );
+
     return;
   }
 
   const wasDeleted = await forgetMemory(key);
 
   if (!wasDeleted) {
-    console.log(`AI: "${key}" naam ki memory nahi mili.\n`);
+    console.log(
+      `AI: "${key}" naam ki memory nahi mili.\n`
+    );
+
     return;
   }
 
-  console.log(`AI: Maine "${key}" memory se delete kar diya.\n`);
+  console.log(
+    `AI: Maine "${key}" memory se delete kar diya.\n`
+  );
+}
+
+function displayMemoryOperations(
+  memoryOperations
+) {
+  if (
+    !Array.isArray(memoryOperations) ||
+    memoryOperations.length === 0
+  ) {
+    return;
+  }
+
+  for (const memory of memoryOperations) {
+    if (memory.operation === "set") {
+      console.log(
+        `Memory saved: ${memory.key} = ` +
+        `${formatValue(memory.value)}`
+      );
+
+      continue;
+    }
+
+    if (memory.operation === "delete") {
+      console.log(
+        `Memory deleted: ${memory.key}`
+      );
+    }
+  }
+
+  console.log();
 }
 
 async function startChat() {
-  /*
-   * Dono types ki memory startup par load karo.
-   */
   await Promise.all([
     loadChatHistory(),
     loadUserMemory(),
@@ -150,31 +216,58 @@ async function startChat() {
   console.log("=================================");
   console.log("       Gemini Memory Chat");
   console.log("=================================");
-  console.log("Level 4: Long-term user memory");
-  console.log(`Chat messages loaded: ${getHistoryCount()}`);
   console.log(
-    `Long-term memories loaded: ${Object.keys(getUserMemory()).length}`
+    "Level 5: Automatic memory extraction"
+  );
+  console.log(
+    `Chat messages loaded: ${getHistoryCount()}`
+  );
+  console.log(
+    `Long-term memories loaded: ${
+      Object.keys(getUserMemory() ?? {}).length
+    }`
   );
 
   console.log("\nAvailable commands:");
-  console.log("  /history              - Chat history dekho");
-  console.log("  /reset                - Chat history clear karo");
-  console.log("  /remember key=value   - Long-term memory save karo");
-  console.log("  /memory               - Long-term memory dekho");
-  console.log("  /forget key           - Specific memory delete karo");
-  console.log("  /clear-memory         - Complete long-term memory clear karo");
-  console.log("  /files                - Storage file paths dekho");
-  console.log("  exit                  - Application close karo");
+  console.log(
+    "  /history              - Chat history dekho"
+  );
+  console.log(
+    "  /reset                - Chat history clear karo"
+  );
+  console.log(
+    "  /remember key=value   - Memory manually save karo"
+  );
+  console.log(
+    "  /memory               - Long-term memory dekho"
+  );
+  console.log(
+    "  /forget key           - Specific memory delete karo"
+  );
+  console.log(
+    "  /clear-memory         - Complete memory clear karo"
+  );
+  console.log(
+    "  /files                - Storage paths dekho"
+  );
+  console.log(
+    "  exit                  - Application close karo"
+  );
   console.log();
 
   while (true) {
     try {
-      const userInput = await terminal.question("You: ");
+      const userInput =
+        await terminal.question("You: ");
+
       const message = userInput.trim();
       const command = message.toLowerCase();
 
       if (!message) {
-        console.log("AI: Please koi message enter karo.\n");
+        console.log(
+          "AI: Please koi message enter karo.\n"
+        );
+
         continue;
       }
 
@@ -191,7 +284,10 @@ async function startChat() {
       if (command === "/reset") {
         await clearChatHistory();
 
-        console.log("AI: Chat history clear kar di gayi hai.\n");
+        console.log(
+          "AI: Chat history clear kar di gayi hai.\n"
+        );
+
         continue;
       }
 
@@ -200,12 +296,18 @@ async function startChat() {
         continue;
       }
 
-      if (command.startsWith("/remember")) {
+      if (
+        command === "/remember" ||
+        command.startsWith("/remember ")
+      ) {
         await handleRememberCommand(message);
         continue;
       }
 
-      if (command.startsWith("/forget")) {
+      if (
+        command === "/forget" ||
+        command.startsWith("/forget ")
+      ) {
         await handleForgetCommand(message);
         continue;
       }
@@ -213,32 +315,72 @@ async function startChat() {
       if (command === "/clear-memory") {
         await clearUserMemory();
 
-        console.log("AI: Complete long-term memory clear kar di gayi hai.\n");
+        console.log(
+          "AI: Complete long-term memory clear kar di gayi hai.\n"
+        );
+
         continue;
       }
 
       if (command === "/files") {
-        console.log(`\nChat history: ${getHistoryFilePath()}`);
-        console.log(`User memory: ${getUserMemoryFilePath()}\n`);
+        console.log(
+          `\nChat history: ${getHistoryFilePath()}`
+        );
+
+        console.log(
+          `User memory: ${getUserMemoryFilePath()}\n`
+        );
+
         continue;
       }
 
-      process.stdout.write("AI: Thinking...\r");
+      process.stdout.write(
+        "AI: Thinking...\r"
+      );
 
-      const reply = await generateReply(message);
+      const result =
+        await generateReply(message);
 
-      process.stdout.write(" ".repeat(60) + "\r");
-      console.log(`AI: ${reply}\n`);
+      process.stdout.write(
+        `${" ".repeat(80)}\r`
+      );
+
+      /*
+       * Defensive handling:
+       * generateReply string ya incomplete object return kare
+       * tab bhi application crash nahi hogi.
+       */
+      const reply =
+        typeof result === "string"
+          ? result
+          : result?.reply;
+
+      const memoryOperations =
+        typeof result === "object" &&
+        result !== null &&
+        Array.isArray(result.memoryOperations)
+          ? result.memoryOperations
+          : [];
+
+      displayMemoryOperations(
+        memoryOperations
+      );
+
+      console.log(
+        `AI: ${reply ?? "No response received"}\n`
+      );
     } catch (error) {
-      process.stdout.write(" ".repeat(60) + "\r");
+      process.stdout.write(
+        `${" ".repeat(80)}\r`
+      );
 
       console.error("\nChat error:");
 
-      if (error instanceof Error) {
-        console.error(error.message);
-      } else {
-        console.error(error);
-      }
+      console.error(
+        error instanceof Error
+          ? error.message
+          : error
+      );
 
       console.log();
     }
@@ -248,7 +390,13 @@ async function startChat() {
 }
 
 startChat().catch((error) => {
-  console.error("Application start nahi ho saki:", error);
+  console.error(
+    "Application start nahi ho saki:",
+    error instanceof Error
+      ? error.message
+      : error
+  );
+
   terminal.close();
   process.exitCode = 1;
 });

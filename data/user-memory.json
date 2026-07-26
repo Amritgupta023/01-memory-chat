@@ -1,10 +1,4 @@
 {
   "name": "Amrit",
-  "profession": "React Developer",
-  "company": "Capgemini",
-  "interests": [
-    "AI",
-    "System Design",
-    "Cloud"
-  ]
+  "company": "Capgemini"
 }
