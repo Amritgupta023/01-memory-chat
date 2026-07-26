@@ -14,10 +14,6 @@ import {
 } from "./memory.service.js";
 
 import {
-  formatUserMemoryForPrompt,
-} from "./user-memory.service.js";
-
-import {
   extractMemories,
 } from "./memory-extractor.service.js";
 
@@ -30,16 +26,28 @@ import {
   generateUpdatedSummary,
 } from "./conversation-summary.service.js";
 
+import {
+  formatRelevantMemoriesForPrompt,
+  retrieveRelevantMemories,
+} from "./semantic-memory.service.js";
+
 const RECENT_MESSAGE_LIMIT = 12;
 const SUMMARY_TRIGGER_LIMIT = 18;
 
+const SEMANTIC_MEMORY_TOP_K = 5;
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.35;
+
 /**
- * Old messages ko summary mein compress karta hai.
+ * Old messages ko running summary mein
+ * compress karta hai.
  */
 async function summarizeHistoryIfNeeded() {
   const historyCount = getHistoryCount();
 
-  if (historyCount < SUMMARY_TRIGGER_LIMIT) {
+  if (
+    historyCount <
+    SUMMARY_TRIGGER_LIMIT
+  ) {
     return {
       summarized: false,
       summarizedMessageCount: 0,
@@ -51,7 +59,9 @@ async function summarizeHistoryIfNeeded() {
       RECENT_MESSAGE_LIMIT
     );
 
-  if (messagesToSummarize.length === 0) {
+  if (
+    messagesToSummarize.length === 0
+  ) {
     return {
       summarized: false,
       summarizedMessageCount: 0,
@@ -66,17 +76,15 @@ async function summarizeHistoryIfNeeded() {
       messagesToSummarize
     );
 
-  /*
-   * Summary generation fail hone par previous aur updated summary
-   * same ho sakti hai. Initial summary empty ho aur output bhi empty
-   * ho to messages remove nahi karne chahiye.
-   */
+  const noSummaryText =
+    "No earlier conversation summary is available.";
+
   const summaryWasCreated =
     Boolean(updatedSummary?.trim()) &&
     (
-      updatedSummary !== previousSummary ||
-      previousSummary !==
-        "No earlier conversation summary is available."
+      updatedSummary !==
+        previousSummary ||
+      previousSummary !== noSummaryText
     );
 
   if (!summaryWasCreated) {
@@ -92,16 +100,29 @@ async function summarizeHistoryIfNeeded() {
 
   return {
     summarized: true,
+
     summarizedMessageCount:
       messagesToSummarize.length,
   };
 }
 
 /**
- * Complete chat flow.
+ * Level 8 complete chat flow:
+ *
+ * 1. Possible long-term memories extract
+ * 2. Extracted memories pending queue mein
+ * 3. User message chat history mein
+ * 4. Older history summarize
+ * 5. Query embedding generate
+ * 6. Relevant approved memories retrieve
+ * 7. Summary + recent history + relevant memory
+ *    ke saath Gemini response
  */
-export async function generateReply(userMessage) {
-  const cleanMessage = userMessage?.trim();
+export async function generateReply(
+  userMessage
+) {
+  const cleanMessage =
+    userMessage?.trim();
 
   if (!cleanMessage) {
     throw new Error(
@@ -111,14 +132,16 @@ export async function generateReply(userMessage) {
 
   /*
    * Step 1:
-   * Long-term memory candidates extract karo.
+   * Natural-language message se possible
+   * long-term memories extract karo.
    */
   const extractedMemories =
     await extractMemories(cleanMessage);
 
   /*
    * Step 2:
-   * Memories ko approval ke liye pending rakho.
+   * Extracted memories directly approve nahi hongi.
+   * Level 6 approval workflow follow hoga.
    */
   const newPendingMemories =
     await addPendingMemories(
@@ -130,35 +153,50 @@ export async function generateReply(userMessage) {
 
   /*
    * Step 3:
-   * Current user message history mein add karo.
+   * User message persistent history mein.
    */
   await addUserMessage(cleanMessage);
 
   try {
     /*
      * Step 4:
-     * Zarurat padne par old messages summarize karo.
+     * Old conversation summarize karo.
      */
     const summaryResult =
       await summarizeHistoryIfNeeded();
 
     /*
      * Step 5:
-     * Approved long-term memory load karo.
+     * User query ke according only relevant
+     * approved memories retrieve karo.
      */
-    const longTermMemory =
-      formatUserMemoryForPrompt();
+    const relevantMemories =
+      await retrieveRelevantMemories(
+        cleanMessage,
+        {
+          topK:
+            SEMANTIC_MEMORY_TOP_K,
+
+          similarityThreshold:
+            SEMANTIC_SIMILARITY_THRESHOLD,
+        }
+      );
+
+    const formattedRelevantMemories =
+      formatRelevantMemoriesForPrompt(
+        relevantMemories
+      );
 
     /*
      * Step 6:
-     * Conversation summary load karo.
+     * Earlier conversation summary.
      */
     const conversationSummary =
       formatConversationSummaryForPrompt();
 
     /*
      * Step 7:
-     * Sirf recent raw messages Gemini ko bhejo.
+     * Recent raw messages.
      */
     const recentConversation =
       getRecentChatHistory(
@@ -175,9 +213,9 @@ export async function generateReply(userMessage) {
           systemInstruction: `
 You are a helpful AI assistant.
 
-Approved long-term user memory:
+Relevant approved long-term user memories retrieved for the current message:
 
-${longTermMemory}
+${formattedRelevantMemories}
 
 Summary of the earlier conversation:
 
@@ -185,20 +223,23 @@ ${conversationSummary}
 
 Instructions:
 
-- Use approved long-term memory only when relevant.
-- Use the conversation summary to understand earlier context.
-- Use recent raw messages for immediate conversational context.
-- Prefer recent explicit information when it conflicts with the summary.
-- Do not mention internal JSON files, summarization or memory implementation.
-- Do not claim pending memories are approved.
-- Do not invent user details.
+- Use retrieved memories only when they are relevant to the current request.
+- The retrieved memories are approved long-term user facts.
+- Do not assume that non-retrieved memories do not exist.
+- Use the conversation summary for earlier conversational context.
+- Use recent raw messages for immediate context.
+- Prefer the user's latest explicit statement when information conflicts.
+- Do not mention embeddings, vector search, similarity scores, JSON files or internal memory implementation.
+- Do not claim that pending memories have been approved.
+- Never invent personal information.
 - Reply clearly and concisely.
 - Use Hinglish when the user writes in Hindi or Hinglish.
           `.trim(),
         },
       });
 
-    const reply = response.text?.trim();
+    const reply =
+      response.text?.trim();
 
     if (!reply) {
       throw new Error(
@@ -217,16 +258,33 @@ Instructions:
           : [],
 
       summary: {
-        updated: summaryResult.summarized,
+        updated:
+          summaryResult.summarized,
 
         summarizedMessageCount:
-          summaryResult.summarizedMessageCount,
+          summaryResult
+            .summarizedMessageCount,
+      },
+
+      semanticMemory: {
+        retrievedCount:
+          relevantMemories.length,
+
+        memories:
+          relevantMemories.map(
+            (memory) => ({
+              key: memory.key,
+              value: memory.value,
+
+              similarity:
+                Number(
+                  memory.similarity.toFixed(4)
+                ),
+            })
+          ),
       },
     };
   } catch (error) {
-    /*
-     * Last user message history mein exist karta ho to rollback.
-     */
     await removeLastMessage();
 
     throw error;
